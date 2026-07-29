@@ -29,3 +29,12 @@ node_modules
 .amplify
 amplify_outputs*
 amplifyconfiguration*
+
+# AgentCore generated files
+DefectAnalysisAgent/agentcore/.cli/
+DefectAnalysisAgent/agentcore/aws-targets.json
+
+# Python generated files
+DefectAnalysisAgent/**/__pycache__/
+DefectAnalysisAgent/.venv/
+DefectAnalysisAgent/venv/
