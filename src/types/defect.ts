@@ -27,6 +27,7 @@ export type DefectFormValues = {
   occurredAt: string;
   dueDate: string;
   description: string;
+  reworkCount: number;
 
   // 原因分析
   cause: string;

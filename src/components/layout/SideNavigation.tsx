@@ -3,6 +3,7 @@ import AssessmentIcon from "@mui/icons-material/Assessment";
 import DashboardIcon from "@mui/icons-material/Dashboard";
 import EventNoteIcon from "@mui/icons-material/EventNote";
 import ListAltIcon from "@mui/icons-material/ListAlt";
+import AssignmentIcon from "@mui/icons-material/Assignment";
 import {
   Divider,
   Drawer,
@@ -40,6 +41,11 @@ const menuItems = [
     label: "月次振り返り",
     path: "/monthly-review",
     icon: <EventNoteIcon />,
+  },
+  {
+  label: "担当課題数",
+  path: "/monthly-workloads",
+  icon: <AssignmentIcon />,
   },
   {
     label: "分析",

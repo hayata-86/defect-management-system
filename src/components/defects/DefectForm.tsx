@@ -86,6 +86,7 @@ const initialValues: DefectFormValues = {
   implementationTiming: "",
 
   causeCategory: "",
+  reworkCount: 0,
   isRecurrence: false,
   relatedDefectId: "",
   completedAt: "",
@@ -109,11 +110,19 @@ export function DefectForm({
           isSubmitting,
       },
   } = useForm<DefectFormValues>({
-      defaultValues,
+      defaultValues: {
+        ...initialValues,
+        ...defaultValues,
+        reworkCount: defaultValues.reworkCount ?? 0,
+      },
   });
 
   useEffect(() => {
-      reset(defaultValues);
+    reset({
+      ...initialValues,
+      ...defaultValues,
+      reworkCount: defaultValues.reworkCount ?? 0,
+    });
   }, [defaultValues, reset]);
 
   const occurredAt = watch("occurredAt");
@@ -643,6 +652,37 @@ useEffect(() => {
               </Select>
             </FormControl>
           )}
+        />
+
+        <TextField
+          label="手戻り回数"
+          type="number"
+          fullWidth
+          error={Boolean(errors.reworkCount)}
+          helperText={
+            errors.reworkCount?.message ??
+            "手戻りがない場合は0を入力してください。"
+          }
+          slotProps={{
+            htmlInput: {
+              min: 0,
+              step: 1,
+            },
+          }}
+          {...register("reworkCount", {
+            valueAsNumber: true,
+            setValueAs: (value) =>
+              value === "" || Number.isNaN(Number(value))
+                ? 0
+                : Number(value),
+            min: {
+              value: 0,
+              message: "手戻り回数は0以上で入力してください。",
+            },
+            validate: (value) =>
+              Number.isInteger(value) ||
+              "手戻り回数は整数で入力してください。",
+          })}
         />
 
         <TextField

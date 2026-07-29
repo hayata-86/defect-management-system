@@ -13,6 +13,7 @@ import { DefectEditPage } from "../pages/defects/DefectEditPage";
 import { DefectListPage } from "../pages/defects/DefectListPage";
 import { MonthlyReviewPage } from "../pages/monthly-review/MonthlyReviewPage";
 import { NotFoundPage } from "../pages/not-found/NotFoundPage";
+import { MonthlyWorkloadPage } from "../pages/monthly-workload/MonthlyWorkloadPage";
 
 export const router = createBrowserRouter([
   // 認証不要
@@ -59,6 +60,10 @@ export const router = createBrowserRouter([
           {
             path: "/monthly-review",
             element: <MonthlyReviewPage />,
+          },
+          {
+            path: "/monthly-workloads",
+            element: <MonthlyWorkloadPage />,
           },
           {
             path: "/analysis",

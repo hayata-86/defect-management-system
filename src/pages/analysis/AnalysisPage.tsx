@@ -22,13 +22,35 @@
   TableRow,
   Typography,
 } from "@mui/material";
+import { useEffect, useMemo, useState } from "react";
 
-import { useMemo, useState } from "react";
 import { useAIAnalysis } from "../../hooks/useAIAnalysis";
+
+type Defect = {
+  id: string;
+  title: string;
+  projectName: string;
+  assignee: string;
+  status: string;
+  priority: string;
+  occurredAt: string;
+  causeCategory?: string;
+  reworkCount?: number | string;
+};
+
+type MonthlyWorkload = {
+  id: string;
+  month: string;
+  assignee: string;
+  taskCount: number;
+  registeredAt?: string;
+  updatedAt?: string;
+};
 
 type MonthlyAnalysis = {
   month: string;
   taskCount: number;
+  defectCount: number;
   reworkCount: number;
   reworkTaskCount: number;
 };
@@ -38,67 +60,17 @@ type CauseAnalysis = {
   count: number;
 };
 
-const monthlyData: MonthlyAnalysis[] = [
-  {
-    month: "2026-03",
-    taskCount: 5,
-    reworkCount: 3,
-    reworkTaskCount: 2,
-  },
-  {
-    month: "2026-04",
-    taskCount: 6,
-    reworkCount: 2,
-    reworkTaskCount: 2,
-  },
-  {
-    month: "2026-05",
-    taskCount: 5,
-    reworkCount: 2,
-    reworkTaskCount: 2,
-  },
-  {
-    month: "2026-06",
-    taskCount: 4,
-    reworkCount: 4,
-    reworkTaskCount: 2,
-  },
-  {
-    month: "2026-07",
-    taskCount: 6,
-    reworkCount: 2,
-    reworkTaskCount: 1,
-  },
-];
-
-const causeData: CauseAnalysis[] = [
-  {
-    cause: "仕様理解不足",
-    count: 4,
-  },
-  {
-    cause: "確認漏れ",
-    count: 3,
-  },
-  {
-    cause: "設計書反映漏れ",
-    count: 2,
-  },
-  {
-    cause: "テスト不足",
-    count: 2,
-  },
-  {
-    cause: "実装ミス",
-    count: 1,
-  },
-];
-
 type AnalysisCardProps = {
   title: string;
   value: string;
   description: string;
 };
+
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ??
+  "http://localhost:3001";
+
+const ALL_ASSIGNEES = "__all__";
 
 function AnalysisCard({
   title,
@@ -108,10 +80,7 @@ function AnalysisCard({
   return (
     <Card variant="outlined">
       <CardContent>
-        <Typography
-          variant="body2"
-          color="text.secondary"
-        >
+        <Typography variant="body2" color="text.secondary">
           {title}
         </Typography>
 
@@ -126,10 +95,7 @@ function AnalysisCard({
           {value}
         </Typography>
 
-        <Typography
-          variant="caption"
-          color="text.secondary"
-        >
+        <Typography variant="caption" color="text.secondary">
           {description}
         </Typography>
       </CardContent>
@@ -137,11 +103,41 @@ function AnalysisCard({
   );
 }
 
-export function AnalysisPage() {
-  const [period, setPeriod] =
-    useState("5");
+function getMonthFromOccurredAt(
+  occurredAt: string,
+): string | null {
+  if (!occurredAt || occurredAt.length < 7) {
+    return null;
+  }
 
-      const {
+  const month = occurredAt.slice(0, 7);
+
+  return /^\d{4}-\d{2}$/.test(month) ? month : null;
+}
+
+function normalizeReworkCount(
+  value: number | string | undefined,
+): number {
+  const convertedValue = Number(value ?? 0);
+
+  if (!Number.isFinite(convertedValue) || convertedValue < 0) {
+    return 0;
+  }
+
+  return convertedValue;
+}
+
+export function AnalysisPage() {
+  const [period, setPeriod] = useState("5");
+  const [selectedAssignee, setSelectedAssignee] =
+    useState(ALL_ASSIGNEES);
+  const [defects, setDefects] = useState<Defect[]>([]);
+  const [monthlyWorkloads, setMonthlyWorkloads] =
+    useState<MonthlyWorkload[]>([]);
+  const [isLoadingData, setIsLoadingData] = useState(true);
+  const [dataErrorMessage, setDataErrorMessage] = useState("");
+
+  const {
     analysis,
     errorMessage,
     isAnalyzing,
@@ -149,36 +145,257 @@ export function AnalysisPage() {
     clearAnalysis,
   } = useAIAnalysis();
 
- const displayedMonthlyData = useMemo<MonthlyAnalysis[]>(
-    () => monthlyData.slice(-Number(period)),
-    [period],
+  useEffect(() => {
+    const abortController = new AbortController();
+
+    const fetchData = async (): Promise<void> => {
+      setIsLoadingData(true);
+      setDataErrorMessage("");
+
+      try {
+        const [defectResponse, workloadResponse] = await Promise.all([
+          fetch(`${API_BASE_URL}/defects`, {
+            signal: abortController.signal,
+          }),
+          fetch(`${API_BASE_URL}/monthlyWorkloads`, {
+            signal: abortController.signal,
+          }),
+        ]);
+
+        if (!defectResponse.ok) {
+          throw new Error(
+            `不具合データの取得に失敗しました。HTTP ${defectResponse.status}`,
+          );
+        }
+
+        if (!workloadResponse.ok) {
+          throw new Error(
+            `担当課題数データの取得に失敗しました。HTTP ${workloadResponse.status}`,
+          );
+        }
+
+        const defectData: unknown = await defectResponse.json();
+        const workloadData: unknown =
+          await workloadResponse.json();
+
+        if (!Array.isArray(defectData)) {
+          throw new Error(
+            "不具合データの形式が正しくありません。",
+          );
+        }
+
+        if (!Array.isArray(workloadData)) {
+          throw new Error(
+            "担当課題数データの形式が正しくありません。",
+          );
+        }
+
+        setDefects(defectData as Defect[]);
+        setMonthlyWorkloads(workloadData as MonthlyWorkload[]);
+      } catch (error) {
+        if (
+          error instanceof DOMException &&
+          error.name === "AbortError"
+        ) {
+          return;
+        }
+
+        setDataErrorMessage(
+          error instanceof Error
+            ? error.message
+            : "分析データの取得中にエラーが発生しました。",
+        );
+      } finally {
+        if (!abortController.signal.aborted) {
+          setIsLoadingData(false);
+        }
+      }
+    };
+
+    void fetchData();
+
+    return () => {
+      abortController.abort();
+    };
+  }, []);
+
+  const assignees = useMemo(() => {
+    const values = new Set<string>();
+
+    monthlyWorkloads.forEach((workload) => {
+      const assignee = workload.assignee?.trim();
+
+      if (assignee) {
+        values.add(assignee);
+      }
+    });
+
+    defects.forEach((defect) => {
+      const assignee = defect.assignee?.trim();
+
+      if (assignee) {
+        values.add(assignee);
+      }
+    });
+
+    return [...values].sort((left, right) =>
+      left.localeCompare(right, "ja"),
+    );
+  }, [defects, monthlyWorkloads]);
+
+  const filteredDefects = useMemo(
+    () =>
+      selectedAssignee === ALL_ASSIGNEES
+        ? defects
+        : defects.filter(
+            (defect) =>
+              defect.assignee === selectedAssignee,
+          ),
+    [defects, selectedAssignee],
   );
 
-  const totalTaskCount =
+  const filteredWorkloads = useMemo(
+    () =>
+      selectedAssignee === ALL_ASSIGNEES
+        ? monthlyWorkloads
+        : monthlyWorkloads.filter(
+            (workload) =>
+              workload.assignee === selectedAssignee,
+          ),
+    [monthlyWorkloads, selectedAssignee],
+  );
+
+  const monthlyData = useMemo<MonthlyAnalysis[]>(() => {
+    const monthlyMap = new Map<string, MonthlyAnalysis>();
+
+    filteredWorkloads.forEach((workload) => {
+      if (!/^\d{4}-\d{2}$/.test(workload.month)) {
+        return;
+      }
+
+      const taskCount = Number(workload.taskCount ?? 0);
+      const current = monthlyMap.get(workload.month) ?? {
+        month: workload.month,
+        taskCount: 0,
+        defectCount: 0,
+        reworkCount: 0,
+        reworkTaskCount: 0,
+      };
+
+      if (Number.isFinite(taskCount) && taskCount >= 0) {
+        current.taskCount += taskCount;
+      }
+
+      monthlyMap.set(workload.month, current);
+    });
+
+    filteredDefects.forEach((defect) => {
+      const month = getMonthFromOccurredAt(defect.occurredAt);
+
+      if (!month) {
+        return;
+      }
+
+      const reworkCount =
+        normalizeReworkCount(defect.reworkCount);
+      const current = monthlyMap.get(month) ?? {
+        month,
+        taskCount: 0,
+        defectCount: 0,
+        reworkCount: 0,
+        reworkTaskCount: 0,
+      };
+
+      current.defectCount += 1;
+      current.reworkCount += reworkCount;
+
+      if (reworkCount > 0) {
+        current.reworkTaskCount += 1;
+      }
+
+      monthlyMap.set(month, current);
+    });
+
+    return [...monthlyMap.values()].sort((left, right) =>
+      left.month.localeCompare(right.month),
+    );
+  }, [filteredDefects, filteredWorkloads]);
+
+  const displayedMonthlyData = useMemo<MonthlyAnalysis[]>(
+    () => monthlyData.slice(-Number(period)),
+    [monthlyData, period],
+  );
+
+  const displayedMonths = useMemo(
+    () =>
+      new Set(
+        displayedMonthlyData.map((data) => data.month),
+      ),
+    [displayedMonthlyData],
+  );
+
+  const displayedDefects = useMemo(
+    () =>
+      filteredDefects.filter((defect) => {
+        const month =
+          getMonthFromOccurredAt(defect.occurredAt);
+
+        return month ? displayedMonths.has(month) : false;
+      }),
+    [filteredDefects, displayedMonths],
+  );
+
+  const causeData = useMemo<CauseAnalysis[]>(() => {
+    const causeMap = new Map<string, number>();
+
+    displayedDefects.forEach((defect) => {
+      const cause =
+        defect.causeCategory?.trim() || "未分類";
+
+      causeMap.set(
+        cause,
+        (causeMap.get(cause) ?? 0) + 1,
+      );
+    });
+
+    return [...causeMap.entries()]
+      .map(([cause, count]) => ({
+        cause,
+        count,
+      }))
+      .sort(
+        (left, right) =>
+          right.count - left.count,
+      );
+  }, [displayedDefects]);
+
+  const totalTaskCount = displayedMonthlyData.reduce(
+    (total, data) => total + data.taskCount,
+    0,
+  );
+
+  const totalDefectCount =
     displayedMonthlyData.reduce(
-      (total, data) =>
-        total + data.taskCount,
+      (total, data) => total + data.defectCount,
       0,
     );
 
   const totalReworkCount =
     displayedMonthlyData.reduce(
-      (total, data) =>
-        total + data.reworkCount,
+      (total, data) => total + data.reworkCount,
       0,
     );
 
   const totalReworkTaskCount =
     displayedMonthlyData.reduce(
       (total, data) =>
-        total +
-        data.reworkTaskCount,
+        total + data.reworkTaskCount,
       0,
     );
 
   const averageReworkRate =
     totalTaskCount === 0
-      ? 0
+      ? null
       : Number(
           (
             (totalReworkTaskCount /
@@ -197,91 +414,151 @@ export function AnalysisPage() {
       displayedMonthlyData.length - 2
     ];
 
-  const latestRate = latestData
-    ? Number(
-        (
-          (latestData.reworkTaskCount /
-            latestData.taskCount) *
-          100
-        ).toFixed(1),
+  const latestRate =
+    latestData && latestData.taskCount > 0
+      ? Number(
+          (
+            (latestData.reworkTaskCount /
+              latestData.taskCount) *
+            100
+          ).toFixed(1),
+        )
+      : null;
+
+  const previousRate =
+    previousData && previousData.taskCount > 0
+      ? Number(
+          (
+            (previousData.reworkTaskCount /
+              previousData.taskCount) *
+            100
+          ).toFixed(1),
+        )
+      : null;
+
+  const rateDifference =
+    latestRate !== null && previousRate !== null
+      ? Number(
+          (latestRate - previousRate).toFixed(1),
+        )
+      : null;
+
+  const maximumCauseCount =
+    causeData.length === 0
+      ? 0
+      : Math.max(
+          ...causeData.map((cause) => cause.count),
+        );
+
+  const workloadMissingMonths =
+    displayedMonthlyData
+      .filter(
+        (data) =>
+          data.taskCount === 0 &&
+          data.defectCount > 0,
       )
-    : 0;
+      .map((data) => data.month);
 
-  const previousRate = previousData
-    ? Number(
-        (
-          (previousData.reworkTaskCount /
-            previousData.taskCount) *
-          100
-        ).toFixed(1),
-      )
-    : 0;
-
-  const rateDifference = Number(
-    (
-      latestRate - previousRate
-    ).toFixed(1),
-  );
-
-  const maximumCauseCount = Math.max(
-    ...causeData.map(
-      (cause) => cause.count,
-    ),
-  );
-
-    const buildAnalysisPrompt = (): string => {
+  const buildAnalysisPrompt = (): string => {
     const monthlySummary =
       displayedMonthlyData
         .map((data) => {
           const reworkRate =
             data.taskCount === 0
-              ? 0
-              : Number(
+              ? "算出不可"
+              : `${Number(
                   (
                     (data.reworkTaskCount /
                       data.taskCount) *
                     100
                   ).toFixed(1),
-                );
+                )}%`;
 
           return [
             `対象月: ${data.month}`,
             `担当課題数: ${data.taskCount}件`,
+            `不具合件数: ${data.defectCount}件`,
             `手戻り回数: ${data.reworkCount}回`,
             `手戻り課題数: ${data.reworkTaskCount}件`,
-            `手戻り発生率: ${reworkRate}%`,
+            `手戻り発生率: ${reworkRate}`,
           ].join("、");
         })
         .join("\n");
 
-    const causeSummary = causeData
-      .map(
-        (cause) =>
-          `${cause.cause}: ${cause.count}件`,
-      )
-      .join("\n");
+    const causeSummary =
+      causeData.length === 0
+        ? "原因分類データなし"
+        : causeData
+            .map(
+              (cause) =>
+                `${cause.cause}: ${cause.count}件`,
+            )
+            .join("\n");
+
+    const defectSummary =
+      displayedDefects
+        .map((defect) =>
+          [
+            `ID: ${defect.id}`,
+            `件名: ${defect.title}`,
+            `プロジェクト: ${defect.projectName}`,
+            `担当者: ${defect.assignee}`,
+            `状態: ${defect.status}`,
+            `優先度: ${defect.priority}`,
+            `発生日: ${defect.occurredAt}`,
+            `原因分類: ${
+              defect.causeCategory || "未分類"
+            }`,
+            `手戻り回数: ${normalizeReworkCount(
+              defect.reworkCount,
+            )}回`,
+          ].join("、"),
+        )
+        .join("\n");
+
+    const targetAssignee =
+      selectedAssignee === ALL_ASSIGNEES
+        ? "全担当者"
+        : selectedAssignee;
 
     return `
-以下は不具合管理システムの集計データです。
+以下は不具合管理システムに登録されている実データの集計結果です。
 
-【集計期間】
-直近${period}か月
+【分析対象】
+担当者: ${targetAssignee}
+集計期間: 直近${period}か月
 
 【全体集計】
 担当課題数: ${totalTaskCount}件
+不具合件数: ${totalDefectCount}件
 手戻り合計回数: ${totalReworkCount}回
 手戻りが発生した課題数: ${totalReworkTaskCount}件
-平均手戻り発生率: ${averageReworkRate}%
-最新月の手戻り発生率: ${latestRate}%
+平均手戻り発生率: ${
+      averageReworkRate === null
+        ? "算出不可"
+        : `${averageReworkRate}%`
+    }
+最新月の手戻り発生率: ${
+      latestRate === null
+        ? "算出不可"
+        : `${latestRate}%`
+    }
 前月との差: ${
-      rateDifference > 0 ? "+" : ""
-    }${rateDifference}%
+      rateDifference === null
+        ? "算出不可"
+        : `${
+            rateDifference > 0 ? "+" : ""
+          }${rateDifference}%`
+    }
 
 【月別データ】
-${monthlySummary}
+${monthlySummary || "月別データなし"}
 
 【原因別データ】
 ${causeSummary}
+
+【不具合一覧】
+${defectSummary || "不具合データなし"}
 
 上記データを分析し、次の項目に分けて日本語で回答してください。
 
@@ -291,17 +568,45 @@ ${causeSummary}
 4. 改善策
 5. 次月に確認すべき指標
 
-数値を根拠として示し、簡潔で実務的な内容にしてください。
+担当課題数が0件の月については手戻り発生率を推測せず、「算出不可」として扱ってください。
+数値と登録済み不具合の内容を根拠として示し、簡潔で実務的な内容にしてください。
     `.trim();
   };
 
   const handleAIAnalysis =
     async (): Promise<void> => {
-      const prompt =
-        buildAnalysisPrompt();
+      if (displayedDefects.length === 0) {
+        return;
+      }
 
-      await executeAnalysis(prompt);
+      await executeAnalysis(
+        buildAnalysisPrompt(),
+      );
     };
+
+  if (isLoadingData) {
+    return (
+      <Box
+        sx={{
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+          minHeight: 320,
+        }}
+      >
+        <Stack
+          spacing={2}
+          sx={{ alignItems: "center" }}
+        >
+          <CircularProgress />
+
+          <Typography color="text.secondary">
+            分析データを読み込んでいます。
+          </Typography>
+        </Stack>
+      </Box>
+    );
+  }
 
   return (
     <Stack spacing={3}>
@@ -318,40 +623,93 @@ ${causeSummary}
           color="text.secondary"
           sx={{ marginTop: 0.5 }}
         >
-          課題数、手戻り発生率、原因別の傾向を分析します。
+          登録済みの担当課題数と不具合データから、
+          手戻り発生率と原因別の傾向を分析します。
         </Typography>
       </Box>
 
-      <Paper
-        variant="outlined"
-        sx={{ padding: 3 }}
-      >
-        <FormControl
-          sx={{ minWidth: 200 }}
+      {dataErrorMessage && (
+        <Alert severity="error">
+          {dataErrorMessage}
+        </Alert>
+      )}
+
+      {!dataErrorMessage &&
+        workloadMissingMonths.length > 0 && (
+          <Alert severity="warning">
+            次の月は担当課題数が未登録のため、
+            手戻り発生率を算出できません：
+            {workloadMissingMonths.join("、")}
+          </Alert>
+        )}
+
+      {!dataErrorMessage &&
+        defects.length === 0 &&
+        monthlyWorkloads.length === 0 && (
+          <Alert severity="info">
+            分析対象となるデータが登録されていません。
+          </Alert>
+        )}
+
+      <Paper variant="outlined" sx={{ padding: 3 }}>
+        <Stack
+          direction={{ xs: "column", sm: "row" }}
+          spacing={2}
         >
-          <InputLabel id="period-label">
-            集計期間
-          </InputLabel>
+          <FormControl sx={{ minWidth: 200 }}>
+            <InputLabel id="assignee-analysis-label">
+              担当者
+            </InputLabel>
 
-          <Select
-            labelId="period-label"
-            label="集計期間"
-            value={period}
-            onChange={(event) =>
-              setPeriod(
-                event.target.value,
-              )
-            }
-          >
-            <MenuItem value="3">
-              直近3か月
-            </MenuItem>
+            <Select
+              labelId="assignee-analysis-label"
+              label="担当者"
+              value={selectedAssignee}
+              onChange={(event) => {
+                setSelectedAssignee(
+                  event.target.value,
+                );
+                clearAnalysis();
+              }}
+            >
+              <MenuItem value={ALL_ASSIGNEES}>
+                全担当者
+              </MenuItem>
 
-            <MenuItem value="5">
-              直近5か月
-            </MenuItem>
-          </Select>
-        </FormControl>
+              {assignees.map((assignee) => (
+                <MenuItem
+                  key={assignee}
+                  value={assignee}
+                >
+                  {assignee}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+
+          <FormControl sx={{ minWidth: 200 }}>
+            <InputLabel id="period-label">
+              集計期間
+            </InputLabel>
+
+            <Select
+              labelId="period-label"
+              label="集計期間"
+              value={period}
+              onChange={(event) => {
+                setPeriod(event.target.value);
+                clearAnalysis();
+              }}
+            >
+              <MenuItem value="3">
+                直近3か月
+              </MenuItem>
+              <MenuItem value="5">
+                直近5か月
+              </MenuItem>
+            </Select>
+          </FormControl>
+        </Stack>
       </Paper>
 
       <Box
@@ -360,7 +718,7 @@ ${causeSummary}
           gridTemplateColumns: {
             xs: "1fr",
             sm: "repeat(2, 1fr)",
-            xl: "repeat(4, 1fr)",
+            xl: "repeat(5, 1fr)",
           },
           gap: 2,
         }}
@@ -368,7 +726,13 @@ ${causeSummary}
         <AnalysisCard
           title="担当課題数"
           value={`${totalTaskCount}件`}
-          description="集計期間内の担当課題数"
+          description="当月に担当した課題数"
+        />
+
+        <AnalysisCard
+          title="不具合件数"
+          value={`${totalDefectCount}件`}
+          description="集計期間内の登録不具合数"
         />
 
         <AnalysisCard
@@ -379,17 +743,23 @@ ${causeSummary}
 
         <AnalysisCard
           title="平均手戻り発生率"
-          value={`${averageReworkRate}%`}
+          value={
+            averageReworkRate === null
+              ? "算出不可"
+              : `${averageReworkRate}%`
+          }
           description="担当課題数に対する手戻り課題の割合"
         />
 
         <AnalysisCard
           title="前月差"
-          value={`${
-            rateDifference > 0
-              ? "+"
-              : ""
-          }${rateDifference}%`}
+          value={
+            rateDifference === null
+              ? "算出不可"
+              : `${
+                  rateDifference > 0 ? "+" : ""
+                }${rateDifference}%`
+          }
           description="最新月と前月の手戻り発生率差"
         />
       </Box>
@@ -404,10 +774,7 @@ ${causeSummary}
           gap: 3,
         }}
       >
-        <Paper
-          variant="outlined"
-          sx={{ padding: 3 }}
-        >
+        <Paper variant="outlined" sx={{ padding: 3 }}>
           <Stack spacing={2}>
             <Box>
               <Typography
@@ -421,104 +788,111 @@ ${causeSummary}
                 variant="body2"
                 color="text.secondary"
               >
-                月ごとの課題数と手戻り発生率を表示します。
+                月ごとの担当課題数と不具合データを組み合わせて集計しています。
               </Typography>
             </Box>
 
             <Divider />
 
-            <TableContainer>
-              <Table>
-                <TableHead>
-                  <TableRow>
-                    <TableCell>
-                      対象月
-                    </TableCell>
+            {displayedMonthlyData.length === 0 ? (
+              <Alert severity="info">
+                表示できる月別データがありません。
+              </Alert>
+            ) : (
+              <TableContainer>
+                <Table>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>対象月</TableCell>
+                      <TableCell align="right">
+                        担当課題数
+                      </TableCell>
+                      <TableCell align="right">
+                        不具合件数
+                      </TableCell>
+                      <TableCell align="right">
+                        手戻り回数
+                      </TableCell>
+                      <TableCell align="right">
+                        手戻り課題数
+                      </TableCell>
+                      <TableCell align="right">
+                        手戻り発生率
+                      </TableCell>
+                    </TableRow>
+                  </TableHead>
 
-                    <TableCell align="right">
-                      担当課題数
-                    </TableCell>
+                  <TableBody>
+                    {displayedMonthlyData.map(
+                      (data) => {
+                        const rate =
+                          data.taskCount === 0
+                            ? null
+                            : Number(
+                                (
+                                  (data.reworkTaskCount /
+                                    data.taskCount) *
+                                  100
+                                ).toFixed(1),
+                              );
 
-                    <TableCell align="right">
-                      手戻り回数
-                    </TableCell>
+                        return (
+                          <TableRow
+                            key={data.month}
+                            hover
+                          >
+                            <TableCell>
+                              {data.month}
+                            </TableCell>
 
-                    <TableCell align="right">
-                      手戻り課題数
-                    </TableCell>
+                            <TableCell align="right">
+                              {data.taskCount}件
+                            </TableCell>
 
-                    <TableCell align="right">
-                      手戻り発生率
-                    </TableCell>
-                  </TableRow>
-                </TableHead>
+                            <TableCell align="right">
+                              {data.defectCount}件
+                            </TableCell>
 
-                <TableBody>
-                  {displayedMonthlyData.map(
-                    (data) => {
-                      const rate =
-                        data.taskCount === 0
-                          ? 0
-                          : Number(
-                              (
-                                (data.reworkTaskCount /
-                                  data.taskCount) *
-                                100
-                              ).toFixed(1),
-                            );
+                            <TableCell align="right">
+                              {data.reworkCount}回
+                            </TableCell>
 
-                      return (
-                        <TableRow
-                          key={data.month}
-                          hover
-                        >
-                          <TableCell>
-                            {data.month}
-                          </TableCell>
+                            <TableCell align="right">
+                              {data.reworkTaskCount}件
+                            </TableCell>
 
-                          <TableCell align="right">
-                            {data.taskCount}件
-                          </TableCell>
-
-                          <TableCell align="right">
-                            {data.reworkCount}回
-                          </TableCell>
-
-                          <TableCell align="right">
-                            {
-                              data.reworkTaskCount
-                            }
-                            件
-                          </TableCell>
-
-                          <TableCell align="right">
-                            <Chip
-                              size="small"
-                              label={`${rate}%`}
-                              color={
-                                rate <= 30
-                                  ? "success"
-                                  : rate <=
-                                      50
-                                    ? "warning"
-                                    : "error"
-                              }
-                            />
-                          </TableCell>
-                        </TableRow>
-                      );
-                    },
-                  )}
-                </TableBody>
-              </Table>
-            </TableContainer>
+                            <TableCell align="right">
+                              {rate === null ? (
+                                <Chip
+                                  size="small"
+                                  label="算出不可"
+                                />
+                              ) : (
+                                <Chip
+                                  size="small"
+                                  label={`${rate}%`}
+                                  color={
+                                    rate <= 30
+                                      ? "success"
+                                      : rate <= 50
+                                        ? "warning"
+                                        : "error"
+                                  }
+                                />
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      },
+                    )}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
           </Stack>
         </Paper>
 
-        <Paper
-          variant="outlined"
-          sx={{ padding: 3 }}
-        >
+        <Paper variant="outlined" sx={{ padding: 3 }}>
           <Stack spacing={2.5}>
             <Box>
               <Typography
@@ -532,60 +906,61 @@ ${causeSummary}
                 variant="body2"
                 color="text.secondary"
               >
-                手戻りが発生した主な原因です。
+                集計期間内の原因分類ごとの登録件数です。
               </Typography>
             </Box>
 
             <Divider />
 
-            {causeData.map((cause) => {
-              const percentage =
-                maximumCauseCount === 0
-                  ? 0
-                  : (cause.count /
-                      maximumCauseCount) *
-                    100;
+            {causeData.length === 0 ? (
+              <Alert severity="info">
+                表示できる原因分類データがありません。
+              </Alert>
+            ) : (
+              causeData.map((cause) => {
+                const percentage =
+                  maximumCauseCount === 0
+                    ? 0
+                    : (cause.count /
+                        maximumCauseCount) *
+                      100;
 
-              return (
-                <Box key={cause.cause}>
-                  <Box
-                    sx={{
-                      display: "flex",
-                      justifyContent:
-                        "space-between",
-                      marginBottom: 1,
-                    }}
-                  >
-                    <Typography variant="body2">
-                      {cause.cause}
-                    </Typography>
-
-                    <Typography
-                      variant="body2"
+                return (
+                  <Box key={cause.cause}>
+                    <Box
                       sx={{
-                        fontWeight: 700,
+                        display: "flex",
+                        justifyContent:
+                          "space-between",
+                        marginBottom: 1,
                       }}
                     >
-                      {cause.count}件
-                    </Typography>
-                  </Box>
+                      <Typography variant="body2">
+                        {cause.cause}
+                      </Typography>
 
-                  <LinearProgress
-                    variant="determinate"
-                    value={percentage}
-                    sx={{ height: 8 }}
-                  />
-                </Box>
-              );
-            })}
+                      <Typography
+                        variant="body2"
+                        sx={{ fontWeight: 700 }}
+                      >
+                        {cause.count}件
+                      </Typography>
+                    </Box>
+
+                    <LinearProgress
+                      variant="determinate"
+                      value={percentage}
+                      sx={{ height: 8 }}
+                    />
+                  </Box>
+                );
+              })
+            )}
           </Stack>
         </Paper>
       </Box>
 
-            <Paper
-        variant="outlined"
-        sx={{ padding: 3 }}
-      >
+      <Paper variant="outlined" sx={{ padding: 3 }}>
         <Stack spacing={2}>
           <Box
             sx={{
@@ -616,8 +991,7 @@ ${causeSummary}
                 color="text.secondary"
                 sx={{ marginTop: 0.5 }}
               >
-                集計期間内のデータをAmazon
-                Nova Liteで分析します。
+                選択中の担当者と期間のデータをAmazon Nova Liteで分析します。
               </Typography>
             </Box>
 
@@ -640,10 +1014,12 @@ ${causeSummary}
 
               <Button
                 variant="contained"
-                onClick={
-                  handleAIAnalysis
+                onClick={handleAIAnalysis}
+                disabled={
+                  isAnalyzing ||
+                  displayedDefects.length === 0 ||
+                  Boolean(dataErrorMessage)
                 }
-                disabled={isAnalyzing}
                 startIcon={
                   isAnalyzing ? (
                     <CircularProgress
@@ -672,9 +1048,7 @@ ${causeSummary}
             !errorMessage &&
             !isAnalyzing && (
               <Alert severity="info">
-                「AI分析を実行」を押すと、
-                現在表示している集計データを
-                AIが分析します。
+                「AI分析を実行」を押すと、現在表示しているデータをAIが分析します。
               </Alert>
             )}
 
@@ -683,51 +1057,43 @@ ${causeSummary}
               sx={{
                 display: "flex",
                 alignItems: "center",
-                justifyContent:
-                  "center",
+                justifyContent: "center",
                 minHeight: 160,
               }}
             >
               <Stack
                 spacing={2}
-                sx={{
-                  alignItems: "center",
-                }}
+                sx={{ alignItems: "center" }}
               >
                 <CircularProgress />
 
                 <Typography color="text.secondary">
-                  不具合データを分析しています。
+                  データを分析しています。
                 </Typography>
               </Stack>
             </Box>
           )}
 
-          {analysis &&
-            !isAnalyzing && (
-              <Box
-                sx={{
-                  whiteSpace: "pre-wrap",
-                  lineHeight: 1.8,
-                  overflowWrap:
-                    "anywhere",
-                  backgroundColor:
-                    "action.hover",
-                  borderRadius: 1,
-                  padding: 2.5,
-                }}
+          {analysis && !isAnalyzing && (
+            <Box
+              sx={{
+                whiteSpace: "pre-wrap",
+                lineHeight: 1.8,
+                overflowWrap: "anywhere",
+                backgroundColor:
+                  "action.hover",
+                borderRadius: 1,
+                padding: 2.5,
+              }}
+            >
+              <Typography
+                component="div"
+                sx={{ whiteSpace: "pre-wrap" }}
               >
-                <Typography
-                  component="div"
-                  sx={{
-                    whiteSpace:
-                      "pre-wrap",
-                  }}
-                >
-                  {analysis}
-                </Typography>
-              </Box>
-            )}
+                {analysis}
+              </Typography>
+            </Box>
+          )}
         </Stack>
       </Paper>
     </Stack>

@@ -14,6 +14,7 @@ import { AnalysisPage } from "./pages/analysis/AnalysisPage";
 import { LoginPage } from "./pages/auth/LoginPage";
 import { RegisterPage } from "./pages/auth/RegisterPage";
 import { ConfirmRegisterPage } from "./pages/auth/ConfirmRegisterPage";
+import { MonthlyWorkloadPage } from "./pages/monthly-workload/MonthlyWorkloadPage";
 
 export default function App() {
   return (
@@ -66,6 +67,11 @@ export default function App() {
             <Route
               path="monthly-review"
               element={<MonthlyReviewPage />}
+            />
+
+            <Route
+              path="monthly-workloads"
+              element={<MonthlyWorkloadPage />}
             />
 
             <Route
